@@ -35,7 +35,9 @@ import {
   Send,
   Loader2,
   PlusCircle,
-  HelpCircle
+  HelpCircle,
+  Eye,
+  EyeOff
 } from "lucide-react";
 
 // Types corresponding to server structures
@@ -154,6 +156,97 @@ interface DashboardData {
   monthlyTransactions: { month: string; borrowed: number; returned: number }[];
 }
 
+// CAPTCHA Drawing Component
+const CaptchaCanvas = ({ code, onClick }: { code: string; onClick: () => void }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Fill background with a modern grid pattern
+    ctx.fillStyle = "#F8FAFC";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw some random background circles
+    for (let i = 0; i < 15; i++) {
+      ctx.fillStyle = `rgba(${Math.floor(Math.random() * 150) + 100}, ${Math.floor(Math.random() * 150) + 100}, ${Math.floor(Math.random() * 150) + 100}, 0.12)`;
+      ctx.beginPath();
+      ctx.arc(
+        Math.random() * canvas.width,
+        Math.random() * canvas.height,
+        Math.random() * 12 + 4,
+        0,
+        Math.PI * 2
+      );
+      ctx.fill();
+    }
+
+    // Draw some noisy wavy background lines
+    ctx.strokeStyle = "rgba(100, 116, 139, 0.25)";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.moveTo(0, Math.random() * canvas.height);
+      ctx.bezierCurveTo(
+        canvas.width / 3, Math.random() * canvas.height,
+        (canvas.width * 2) / 3, Math.random() * canvas.height,
+        canvas.width, Math.random() * canvas.height
+      );
+      ctx.stroke();
+    }
+
+    // Draw the code characters with random rotation, color, and vertical offset
+    ctx.textBaseline = "middle";
+    const charWidth = canvas.width / (code.length + 1);
+    
+    for (let i = 0; i < code.length; i++) {
+      const char = code[i];
+      // Randomize color per letter
+      const colors = ["#2563EB", "#1D4ED8", "#4F46E5", "#059669", "#DC2626", "#7C3AED", "#0891B2"];
+      ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+      
+      // Randomize font size slightly
+      const fontSize = Math.floor(Math.random() * 5) + 20; // 20-25px
+      ctx.font = `bold ${fontSize}px "JetBrains Mono", monospace`;
+
+      // Position
+      const x = (i + 0.65) * charWidth;
+      const y = canvas.height / 2 + (Math.random() * 8 - 4);
+
+      // Save context state, translate, rotate, and restore
+      ctx.save();
+      ctx.translate(x, y);
+      const angle = (Math.random() * 30 - 15) * (Math.PI / 180); // -15 to 15 degrees
+      ctx.rotate(angle);
+      ctx.fillText(char, 0, 0);
+      ctx.restore();
+    }
+
+    // Add extra tiny noise dots
+    for (let i = 0; i < 35; i++) {
+      ctx.fillStyle = "rgba(148, 163, 184, 0.4)";
+      ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, 2, 2);
+    }
+  }, [code]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={150}
+      height={44}
+      onClick={onClick}
+      className="border border-[#CBD5E1] rounded-xl overflow-hidden shadow-xs cursor-pointer hover:border-blue-400 transition-all"
+      title="Click to refresh security code"
+    />
+  );
+};
+
 export default function App() {
   // Authentication & Session
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
@@ -173,6 +266,15 @@ export default function App() {
   const [authError, setAuthError] = useState<string>("");
   const [authSuccess, setAuthSuccess] = useState<string>("");
 
+  // Show/Hide Password states
+  const [showLoginPassword, setShowLoginPassword] = useState<boolean>(false);
+  const [showRegPassword, setShowRegPassword] = useState<boolean>(false);
+
+  // Captcha authentication state
+  const [captchaId, setCaptchaId] = useState<string>("");
+  const [captchaCode, setCaptchaCode] = useState<string>("");
+  const [captchaInput, setCaptchaInput] = useState<string>("");
+
   // Register Form
   const [regName, setRegName] = useState<string>("");
   const [regEmail, setRegEmail] = useState<string>("");
@@ -187,6 +289,7 @@ export default function App() {
   const [recommendations, setRecommendations] = useState<Book[]>([]);
   const [borrows, setBorrows] = useState<Borrow[]>([]);
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [userReservations, setUserReservations] = useState<Reservation[]>([]);
   const [fines, setFines] = useState<Fine[]>([]);
   const [notifications, setNotifications] = useState<LibraryNotification[]>([]);
   const [members, setMembers] = useState<User[]>([]);
@@ -209,6 +312,64 @@ export default function App() {
 
   // Notifications state
   const [showNotificationDropdown, setShowNotificationDropdown] = useState<boolean>(false);
+
+  // Custom Toast/Notification and Modal prompt overlays
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    onConfirm: () => void;
+  } | null>(null);
+  const [promptModal, setPromptModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    placeholder?: string;
+    onConfirm: (val: string) => void;
+  } | null>(null);
+
+  const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
+    setToast({ message, type });
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, confirmText = "Confirm", cancelText = "Cancel") => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(null);
+      }
+    });
+  };
+
+  const showPrompt = (title: string, message: string, placeholder: string, onConfirm: (val: string) => void) => {
+    setPromptModal({
+      isOpen: true,
+      title,
+      message,
+      placeholder,
+      onConfirm: (val) => {
+        onConfirm(val);
+        setPromptModal(null);
+      }
+    });
+  };
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 4500);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
 
   // Modal / Form trigger states
   const [showAddBookModal, setShowAddBookModal] = useState<boolean>(false);
@@ -245,6 +406,14 @@ export default function App() {
 
   // Load Initial Core Application Data
   useEffect(() => {
+    // Clear any previous user-specific state to prevent cross-account data bleeding
+    setChatHistory([]);
+    setBorrows([]);
+    setFines([]);
+    setReservations([]);
+    setUserReservations([]);
+    setRecommendations([]);
+
     fetchBooks();
     fetchNotifications();
     if (currentUser) {
@@ -252,6 +421,7 @@ export default function App() {
       fetchUserLoans();
       fetchDashboardMetrics();
       fetchSystemSettings();
+      fetchChatHistory();
       if (currentUser.role === "librarian" || currentUser.role === "admin") {
         fetchMembers();
         fetchAllLoans();
@@ -261,6 +431,8 @@ export default function App() {
       if (currentUser.role === "admin") {
         fetchAuditLogs();
       }
+    } else {
+      fetchCaptcha();
     }
   }, [currentUser]);
 
@@ -310,6 +482,23 @@ export default function App() {
     }
   };
 
+  const fetchChatHistory = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`/api/chatbot/history?userId=${currentUser.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        const mapped = data.map((msg: any) => ({
+          sender: msg.sender,
+          text: msg.message,
+        }));
+        setChatHistory(mapped);
+      }
+    } catch (e) {
+      console.error("Failed to load chat history", e);
+    }
+  };
+
   const fetchUserLoans = async () => {
     if (!currentUser) return;
     try {
@@ -321,7 +510,7 @@ export default function App() {
       const resRes = await fetch(`/api/reservations?userId=${currentUser.id}`);
       if (resRes.ok) {
         const data = await resRes.json();
-        setReservations(data);
+        setUserReservations(data);
       }
       const resFine = await fetch(`/api/fines?userId=${currentUser.id}`);
       if (resFine.ok) {
@@ -436,6 +625,21 @@ export default function App() {
     }
   };
 
+  // Fetch active CAPTCHA challenge
+  const fetchCaptcha = async () => {
+    try {
+      const res = await fetch("/api/auth/captcha");
+      if (res.ok) {
+        const data = await res.json();
+        setCaptchaId(data.id);
+        setCaptchaCode(data.code);
+        setCaptchaInput("");
+      }
+    } catch (e) {
+      console.error("Failed to fetch captcha", e);
+    }
+  };
+
   // Demo account quick login
   const handleQuickLogin = async (role: "admin" | "librarian" | "member" | "member2") => {
     setAuthError("");
@@ -458,7 +662,7 @@ export default function App() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, isDemoBypass: true }),
       });
 
       const data = await res.json();
@@ -486,11 +690,21 @@ export default function App() {
       return;
     }
 
+    if (!captchaInput) {
+      setAuthError("Please verify the Captcha security code.");
+      return;
+    }
+
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+          captchaId,
+          captchaValue: captchaInput
+        }),
       });
 
       const data = await res.json();
@@ -501,9 +715,11 @@ export default function App() {
         setAuthSuccess(`Success! Welcome, ${data.user.name}.`);
       } else {
         setAuthError(data.error || "Invalid credentials.");
+        fetchCaptcha(); // Refresh captcha on failure
       }
     } catch (err) {
       setAuthError("Server communication issue.");
+      fetchCaptcha();
     }
   };
 
@@ -515,6 +731,11 @@ export default function App() {
 
     if (!regName || !regEmail || !regPassword) {
       setAuthError("Name, Email, and Password are required.");
+      return;
+    }
+
+    if (!captchaInput) {
+      setAuthError("Please verify the Captcha security code.");
       return;
     }
 
@@ -530,6 +751,8 @@ export default function App() {
           address: regAddress,
           role: regRole,
           membershipType: regMembership,
+          captchaId,
+          captchaValue: captchaInput
         }),
       });
 
@@ -538,11 +761,14 @@ export default function App() {
         setAuthSuccess("Registration completed! Please log in.");
         setIsRegistering(false);
         setLoginEmail(regEmail);
+        fetchCaptcha(); // Refresh for login screen
       } else {
         setAuthError(data.error || "Registration issue.");
+        fetchCaptcha();
       }
     } catch (err) {
       setAuthError("Server communication issue during registration.");
+      fetchCaptcha();
     }
   };
 
@@ -555,6 +781,9 @@ export default function App() {
     setBorrows([]);
     setFines([]);
     setReservations([]);
+    setUserReservations([]);
+    setChatHistory([]);
+    setChatInput("");
   };
 
   // Book Add or Edit
@@ -580,9 +809,10 @@ export default function App() {
         });
         fetchBooks();
         fetchDashboardMetrics();
+        showToast("Book saved successfully!", "success");
       } else {
         const err = await res.json();
-        alert(err.error || "Failed to save book.");
+        showToast(err.error || "Failed to save book.", "error");
       }
     } catch (err) {
       console.error(err);
@@ -591,18 +821,24 @@ export default function App() {
 
   // Book Delete
   const handleDeleteBook = async (id: string) => {
-    if (!confirm("Are you sure you want to delete this book from catalog?")) return;
-    try {
-      const res = await fetch(`/api/books/${id}?userId=${currentUser?.id}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        fetchBooks();
-        fetchDashboardMetrics();
+    showConfirm(
+      "Delete Book",
+      "Are you sure you want to delete this book from catalog?",
+      async () => {
+        try {
+          const res = await fetch(`/api/books/${id}?userId=${currentUser?.id}`, {
+            method: "DELETE",
+          });
+          if (res.ok) {
+            fetchBooks();
+            fetchDashboardMetrics();
+            showToast("Book successfully deleted from catalog.", "success");
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
-    } catch (e) {
-      console.error(e);
-    }
+    );
   };
 
   // Edit Book modal setup
@@ -636,14 +872,14 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        alert(data.message);
+        showToast(data.message, "success");
         setCsvContent("");
         setShowCsvImport(false);
         fetchBooks();
         fetchDashboardMetrics();
       } else {
         const data = await res.json();
-        alert(data.error);
+        showToast(data.error, "error");
       }
     } catch (e) {
       console.error(e);
@@ -671,9 +907,10 @@ export default function App() {
         });
         fetchMembers();
         fetchDashboardMetrics();
+        showToast("Member saved successfully!", "success");
       } else {
         const data = await res.json();
-        alert(data.error || "Failed to process member.");
+        showToast(data.error || "Failed to process member.", "error");
       }
     } catch (err) {
       console.error(err);
@@ -735,14 +972,107 @@ export default function App() {
         fetchAllLoans();
         fetchBooks();
         fetchDashboardMetrics();
-        alert("Book successfully issued to member!");
+        showToast("Book successfully issued to member!", "success");
       } else {
         const err = await res.json();
-        alert(err.error || "Could not issue book.");
+        showToast(err.error || "Could not issue book.", "error");
       }
     } catch (err) {
       console.error(err);
     }
+  };
+
+  // Approve Borrow or Hold Request by Librarian
+  const handleApproveRequest = async (resId: string, userId: string, bookId: string) => {
+    try {
+      const res = await fetch("/api/borrows/issue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          bookId,
+          librarianId: currentUser?.id,
+        }),
+      });
+
+      if (res.ok) {
+        fetchReservations();
+        fetchAllLoans();
+        fetchBooks();
+        fetchDashboardMetrics();
+        showToast("Borrow request approved successfully! Book is now checked out to the member.", "success");
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Could not approve and issue this book.", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Error approving request.", "error");
+    }
+  };
+
+  // Decline / Cancel Request by Librarian
+  const handleDeclineRequest = async (resId: string) => {
+    showConfirm(
+      "Decline Request",
+      "Are you sure you want to decline this borrow request?",
+      async () => {
+        try {
+          const res = await fetch("/api/reservations/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ reservationId: resId }),
+          });
+          if (res.ok) {
+            fetchReservations();
+            fetchDashboardMetrics();
+            showToast("Request declined / cancelled successfully.", "success");
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    );
+  };
+
+  // Direct Book Borrow Request by Member
+  const handleBorrowBookDirect = async (bookId: string) => {
+    if (!currentUser) {
+      showToast("Please sign in first.", "error");
+      return;
+    }
+
+    const targetBook = books.find(b => b.id === bookId);
+    showConfirm(
+      "Confirm Borrow Request",
+      `Are you sure you want to request to borrow "${targetBook ? targetBook.title : 'this book'}"? Once approved by Librarian, it will be checked out to your account for 14 days.`,
+      async () => {
+        try {
+          const res = await fetch("/api/reservations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              userId: currentUser.id,
+              bookId: bookId,
+            }),
+          });
+
+          if (res.ok) {
+            fetchUserLoans();
+            fetchReservations();
+            fetchNotifications();
+            fetchDashboardMetrics();
+            showToast("Success! Your borrow request has been sent to the Librarian. You will be notified as soon as it is approved!", "success");
+          } else {
+            const err = await res.json();
+            showToast(err.error || "Could not complete this borrow request.", "error");
+          }
+        } catch (e) {
+          console.error(e);
+          showToast("Error contacting the server.", "error");
+        }
+      }
+    );
   };
 
   // Return Book
@@ -759,7 +1089,7 @@ export default function App() {
         fetchFines();
         fetchReservations();
         fetchDashboardMetrics();
-        alert("Book returned successfully!");
+        showToast("Book returned successfully!", "success");
       }
     } catch (e) {
       console.error(e);
@@ -777,10 +1107,10 @@ export default function App() {
       if (res.ok) {
         fetchUserLoans();
         fetchAllLoans();
-        alert("Book due date successfully renewed!");
+        showToast("Book due date successfully renewed!", "success");
       } else {
         const data = await res.json();
-        alert(data.error);
+        showToast(data.error, "error");
       }
     } catch (e) {
       console.error(e);
@@ -790,23 +1120,30 @@ export default function App() {
   // Reserve Book Self-Service
   const handleReserveBook = async (bookId: string) => {
     if (!currentUser) {
-      alert("Please login first to reserve books.");
+      showToast("Please login first to reserve books.", "error");
       return;
     }
-    try {
-      const res = await fetch("/api/reservations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: currentUser.id, bookId }),
-      });
-      if (res.ok) {
-        fetchUserLoans();
-        fetchReservations();
-        alert("Book reserved! You are placed in the queue.");
+    const targetBook = books.find(b => b.id === bookId);
+    showConfirm(
+      "Confirm Queue / Hold Request",
+      `Are you sure you want to request to be placed in the reservation queue for "${targetBook ? targetBook.title : 'this book'}"?`,
+      async () => {
+        try {
+          const res = await fetch("/api/reservations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: currentUser.id, bookId }),
+          });
+          if (res.ok) {
+            fetchUserLoans();
+            fetchReservations();
+            showToast("Book reserved! You are placed in the queue.", "success");
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
-    } catch (e) {
-      console.error(e);
-    }
+    );
   };
 
   // Cancel Reservation
@@ -820,7 +1157,7 @@ export default function App() {
       if (res.ok) {
         fetchUserLoans();
         fetchReservations();
-        alert("Reservation cancelled successfully.");
+        showToast("Reservation cancelled successfully.", "success");
       }
     } catch (e) {
       console.error(e);
@@ -829,23 +1166,29 @@ export default function App() {
 
   // Pay Overdue Fine
   const handlePayFine = async (fineId: string) => {
-    const amt = prompt("Enter amount to pay in ₹:");
-    if (!amt) return;
-    try {
-      const res = await fetch("/api/fines/pay", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fineId, amountPaid: amt, userId: currentUser?.id }),
-      });
-      if (res.ok) {
-        fetchUserLoans();
-        fetchFines();
-        fetchDashboardMetrics();
-        alert("Payment recorded! Updated status saved.");
+    showPrompt(
+      "Record Fine Payment",
+      "Enter payment amount in ₹:",
+      "10.00",
+      async (amt) => {
+        if (!amt) return;
+        try {
+          const res = await fetch("/api/fines/pay", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fineId, amountPaid: amt, userId: currentUser?.id }),
+          });
+          if (res.ok) {
+            fetchUserLoans();
+            fetchFines();
+            fetchDashboardMetrics();
+            showToast("Payment recorded! Updated status saved.", "success");
+          }
+        } catch (e) {
+          console.error(e);
+        }
       }
-    } catch (e) {
-      console.error(e);
-    }
+    );
   };
 
   // Luna AI Assistant Message Send
@@ -897,7 +1240,7 @@ export default function App() {
         body: JSON.stringify({ ...settingsForm, userId: currentUser?.id }),
       });
       if (res.ok) {
-        alert("Library configuration updated successfully!");
+        showToast("Library configuration updated successfully!", "success");
         fetchSystemSettings();
         fetchDashboardMetrics();
       }
@@ -938,6 +1281,483 @@ export default function App() {
     return gradients[sum % gradients.length];
   };
 
+  if (!currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 selection:bg-blue-100 selection:text-blue-900">
+        <div className="w-full max-w-md space-y-8">
+          
+          {/* Logo / Title Header */}
+          <div className="text-center space-y-2">
+            <div className="mx-auto bg-blue-600 text-white w-14 h-14 rounded-2xl shadow-xl shadow-blue-100 flex items-center justify-center">
+              <BookOpen className="w-7 h-7" />
+            </div>
+            <div>
+              <h1 className="font-extrabold text-3xl tracking-tight text-[#0F172A] flex items-center justify-center gap-2">
+                LIBRAFLOW
+              </h1>
+              <p className="text-xs text-slate-500 mt-1">Automated Library Management System</p>
+            </div>
+          </div>
+
+          {/* Card containing Login / Register */}
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-xl shadow-slate-100 overflow-hidden">
+            
+            {/* Tab switchers */}
+            <div className="flex border-b border-slate-100 bg-slate-50/50">
+              <button
+                onClick={() => {
+                  setIsRegistering(false);
+                  setAuthError("");
+                  setAuthSuccess("");
+                  fetchCaptcha();
+                }}
+                className={`flex-1 text-center py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 ${
+                  !isRegistering
+                    ? "border-b-2 border-blue-600 text-blue-600 bg-white"
+                    : "border-transparent text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                🔐 Member Log In
+              </button>
+              <button
+                onClick={() => {
+                  setIsRegistering(true);
+                  setAuthError("");
+                  setAuthSuccess("");
+                  fetchCaptcha();
+                }}
+                className={`flex-1 text-center py-4 text-xs font-bold uppercase tracking-wider transition-all border-b-2 ${
+                  isRegistering
+                    ? "border-b-2 border-blue-600 text-blue-600 bg-white"
+                    : "border-transparent text-slate-500 hover:text-slate-900"
+                }`}
+              >
+                📝 Register Account
+              </button>
+            </div>
+
+            <div className="p-8 space-y-6">
+              {/* Alert messages */}
+              {authError && (
+                <div className="p-4 bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-xl flex items-start gap-2.5">
+                  <span className="text-base">⚠️</span>
+                  <div>
+                    <p className="font-semibold text-rose-800">Verification Problem</p>
+                    <p className="text-[11px] leading-relaxed text-rose-600/90 mt-0.5">{authError}</p>
+                  </div>
+                </div>
+              )}
+
+              {authSuccess && (
+                <div className="p-4 bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs rounded-xl flex items-start gap-2.5">
+                  <span className="text-base">✅</span>
+                  <div>
+                    <p className="font-semibold text-emerald-800">Success!</p>
+                    <p className="text-[11px] leading-relaxed text-emerald-600/90 mt-0.5">{authSuccess}</p>
+                  </div>
+                </div>
+              )}
+
+              {!isRegistering ? (
+                /* LOGIN FORM */
+                <form onSubmit={handleLogin} className="space-y-4">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Email Address</label>
+                    <input
+                      type="email"
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="naseer@gmail.com"
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      required
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Security Password</label>
+                    <div className="relative">
+                      <input
+                        type={showLoginPassword ? "text" : "password"}
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl pl-3.5 pr-11 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        required
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword(!showLoginPassword)}
+                        className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+                        title={showLoginPassword ? "Hide password" : "Show password"}
+                      >
+                        {showLoginPassword ? (
+                          <EyeOff className="w-4 h-4" />
+                        ) : (
+                          <Eye className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* CAPTCHA SECTION */}
+                  <div className="bg-slate-50/50 border border-slate-100 p-4 rounded-2xl space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        🛡️ Captcha Verification
+                      </label>
+                      <button
+                        type="button"
+                        onClick={fetchCaptcha}
+                        className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1"
+                        title="Generate new captcha image"
+                      >
+                        🔄 Refresh Code
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {/* Interactive dynamic canvas */}
+                      <CaptchaCanvas code={captchaCode} onClick={fetchCaptcha} />
+                      
+                      <div className="flex-1 space-y-1">
+                        <input
+                          type="text"
+                          value={captchaInput}
+                          onChange={(e) => setCaptchaInput(e.target.value)}
+                          placeholder="Type security code"
+                          maxLength={5}
+                          className="w-full text-center tracking-widest font-mono font-bold text-sm uppercase bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-xs"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                      Enter the distorted 5-letter alphanumeric code displayed on the safety panel.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider py-3.5 rounded-xl transition-all shadow-lg shadow-blue-100 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    🔐 Unlock LibraFlow Desk
+                  </button>
+                </form>
+              ) : (
+                /* REGISTER FORM */
+                <form onSubmit={handleRegister} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Full Name</label>
+                      <input
+                        type="text"
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder="Md Naseer"
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        required
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Email Address</label>
+                      <input
+                        type="email"
+                        value={regEmail}
+                        onChange={(e) => setRegEmail(e.target.value)}
+                        placeholder="naseer@gmail.com"
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Password</label>
+                      <div className="relative">
+                        <input
+                          type={showRegPassword ? "text" : "password"}
+                          value={regPassword}
+                          onChange={(e) => setRegPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl pl-3.5 pr-11 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                          required
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowRegPassword(!showRegPassword)}
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-none transition-colors"
+                          title={showRegPassword ? "Hide password" : "Show password"}
+                        >
+                          {showRegPassword ? (
+                            <EyeOff className="w-4 h-4" />
+                          ) : (
+                            <Eye className="w-4 h-4" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Contact Phone</label>
+                      <input
+                        type="text"
+                        value={regPhone}
+                        onChange={(e) => setRegPhone(e.target.value)}
+                        placeholder="+91 99999 99999"
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Mailing Address</label>
+                    <input
+                      type="text"
+                      value={regAddress}
+                      onChange={(e) => setRegAddress(e.target.value)}
+                      placeholder="Electronics Enclave, Bangalore"
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">System Role</label>
+                      <select
+                        value={regRole}
+                        onChange={(e) => setRegRole(e.target.value as "member" | "librarian")}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      >
+                        <option value="member">👤 Member Patron</option>
+                        <option value="librarian">📚 Staff Librarian</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Membership tier</label>
+                      <select
+                        value={regMembership}
+                        onChange={(e) => setRegMembership(e.target.value as "basic" | "premium" | "student")}
+                        className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-3 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                      >
+                        <option value="basic">Standard Basic</option>
+                        <option value="student">Academic Student</option>
+                        <option value="premium">Enterprise Premium</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* CAPTCHA SECTION */}
+                  <div className="bg-slate-50/50 border border-slate-100 p-4 rounded-2xl space-y-3.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                        🛡️ Captcha Verification
+                      </label>
+                      <button
+                        type="button"
+                        onClick={fetchCaptcha}
+                        className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1"
+                      >
+                        🔄 Refresh Code
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-4">
+                      {/* Interactive dynamic canvas */}
+                      <CaptchaCanvas code={captchaCode} onClick={fetchCaptcha} />
+                      
+                      <div className="flex-1 space-y-1">
+                        <input
+                          type="text"
+                          value={captchaInput}
+                          onChange={(e) => setCaptchaInput(e.target.value)}
+                          placeholder="Type security code"
+                          maxLength={5}
+                          className="w-full text-center tracking-widest font-mono font-bold text-sm uppercase bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:tracking-normal placeholder:font-normal placeholder:text-xs"
+                          required
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                      Verify security settings to create your automated library credentials.
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full bg-slate-900 hover:bg-black text-white font-bold text-xs uppercase tracking-wider py-3.5 rounded-xl transition-all shadow-lg shadow-slate-100 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    📝 Create New Account
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+
+          {/* SDB Sandbox Quick-Access credentials widget */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-3 shadow-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] uppercase font-bold text-slate-500 tracking-wider flex items-center gap-1.5">
+                💡 Sandbox Developer Profiles
+              </span>
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                1-Click Autofill
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Autofill official test profiles and log in immediately. The server-side captcha checks are automatically handled with demo bypass tokens.
+            </p>
+            <div className="grid grid-cols-2 gap-2.5 pt-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail("admin@libraflow.com");
+                  setLoginPassword("admin123");
+                  setCaptchaInput("DEMO_BYPASS");
+                  handleQuickLogin("admin");
+                }}
+                className="bg-slate-50 border border-slate-200 hover:border-slate-400 text-slate-700 text-xs py-2.5 px-3 rounded-xl font-medium transition-all text-left flex items-center justify-between"
+              >
+                <span>🔐 Admin Portal</span>
+                <span className="text-[9px] text-slate-400">admin</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail("sarah@libraflow.com");
+                  setLoginPassword("librarian123");
+                  setCaptchaInput("DEMO_BYPASS");
+                  handleQuickLogin("librarian");
+                }}
+                className="bg-slate-50 border border-slate-200 hover:border-slate-400 text-slate-700 text-xs py-2.5 px-3 rounded-xl font-medium transition-all text-left flex items-center justify-between"
+              >
+                <span>📚 Librarian</span>
+                <span className="text-[9px] text-slate-400">sarah</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail("md.naseer1708@gmail.com");
+                  setLoginPassword("member123");
+                  setCaptchaInput("DEMO_BYPASS");
+                  handleQuickLogin("member");
+                }}
+                className="bg-slate-50 border border-slate-200 hover:border-slate-400 text-slate-700 text-xs py-2.5 px-3 rounded-xl font-medium transition-all text-left flex items-center justify-between"
+              >
+                <span>👤 Naseer (Premium)</span>
+                <span className="text-[9px] text-slate-400">member</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginEmail("aarav@gmail.com");
+                  setLoginPassword("member123");
+                  setCaptchaInput("DEMO_BYPASS");
+                  handleQuickLogin("member2");
+                }}
+                className="bg-slate-50 border border-slate-200 hover:border-slate-400 text-slate-700 text-xs py-2.5 px-3 rounded-xl font-medium transition-all text-left flex items-center justify-between"
+              >
+                <span>🎓 Aarav (Student)</span>
+                <span className="text-[9px] text-slate-400">aarav</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+        {/* Toast Alert */}
+        {toast && (
+          <div className="fixed bottom-6 right-6 z-50">
+            <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border ${
+              toast.type === "success" 
+                ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
+                : toast.type === "error"
+                ? "bg-rose-50 border-rose-100 text-rose-800"
+                : "bg-blue-50 border-blue-100 text-blue-800"
+            }`}>
+              <span className="text-xs font-semibold">{toast.message}</span>
+              <button 
+                onClick={() => setToast(null)}
+                className="text-xs font-bold hover:opacity-70 px-1 ml-2"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Confirm Modal */}
+        {confirmModal && confirmModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100">
+              <h3 className="font-bold text-base text-[#0F172A] mb-2">{confirmModal.title}</h3>
+              <p className="text-xs text-[#64748B] leading-relaxed mb-6">{confirmModal.message}</p>
+              <div className="flex justify-end gap-2.5">
+                <button
+                  onClick={() => setConfirmModal(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  {confirmModal.cancelText || "Cancel"}
+                </button>
+                <button
+                  onClick={confirmModal.onConfirm}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+                >
+                  {confirmModal.confirmText || "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Prompt Modal */}
+        {promptModal && promptModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100">
+              <h3 className="font-bold text-base text-[#0F172A] mb-2">{promptModal.title}</h3>
+              <p className="text-xs text-[#64748B] leading-relaxed mb-4">{promptModal.message}</p>
+              
+              <input
+                id="prompt-input-login"
+                type="text"
+                defaultValue={promptModal.placeholder || ""}
+                placeholder="Type your response here..."
+                className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] text-xs mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    promptModal.onConfirm((e.currentTarget as HTMLInputElement).value);
+                  }
+                }}
+              />
+              
+              <div className="flex justify-end gap-2.5">
+                <button
+                  onClick={() => setPromptModal(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => {
+                    const input = document.getElementById("prompt-input-login") as HTMLInputElement;
+                    promptModal.onConfirm(input?.value || "");
+                  }}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+                >
+                  Submit
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] text-[#0F172A] font-sans antialiased selection:bg-blue-100 selection:text-blue-900 flex flex-col">
       
@@ -950,7 +1770,6 @@ export default function App() {
           <div>
             <h1 className="font-bold text-lg tracking-tight text-[#0F172A] flex items-center gap-1.5">
               LIBRAFLOW
-              <span className="text-[10px] uppercase font-semibold bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full border border-blue-100">SaaS Suite</span>
             </h1>
             <p className="text-xs text-[#64748B]">Automated Library Ecosystem</p>
           </div>
@@ -1052,56 +1871,15 @@ export default function App() {
         <aside className="w-full lg:w-64 bg-white border-r border-[#E2E8F0] p-5 space-y-7 flex-shrink-0">
           
           {/* Active Status Board */}
-          {!currentUser ? (
-            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-4 space-y-3 shadow-sm">
-              <div className="flex items-center gap-2 text-blue-800">
-                <Sparkles className="w-4 h-4" />
-                <span className="text-xs font-bold uppercase tracking-wider">Explore Premium</span>
-              </div>
-              <p className="text-xs text-blue-900 leading-relaxed">
-                Connect real library credentials to access personalized neural matching, self-issue desk, and fine logs.
-              </p>
-              <div className="space-y-1.5 pt-1.5">
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Instant Demo Accs:</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    onClick={() => handleQuickLogin("admin")}
-                    className="text-[11px] bg-slate-900 text-white py-1 px-1.5 rounded-lg font-medium hover:bg-black transition-all"
-                  >
-                    🔐 Admin
-                  </button>
-                  <button
-                    onClick={() => handleQuickLogin("librarian")}
-                    className="text-[11px] bg-blue-600 text-white py-1 px-1.5 rounded-lg font-medium hover:bg-blue-700 transition-all"
-                  >
-                    📚 Librarian
-                  </button>
-                  <button
-                    onClick={() => handleQuickLogin("member")}
-                    className="text-[11px] bg-emerald-600 text-white py-1 px-1.5 rounded-lg font-medium hover:bg-emerald-700 transition-all"
-                  >
-                    👤 Member (Naseer)
-                  </button>
-                  <button
-                    onClick={() => handleQuickLogin("member2")}
-                    className="text-[11px] bg-purple-600 text-white py-1 px-1.5 rounded-lg font-medium hover:bg-purple-700 transition-all"
-                  >
-                    🎓 Student
-                  </button>
-                </div>
-              </div>
+          <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-sm flex items-center justify-center shadow-inner uppercase">
+              {currentUser.name.substr(0, 2)}
             </div>
-          ) : (
-            <div className="bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl p-4 flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-white font-bold text-sm flex items-center justify-center shadow-inner uppercase">
-                {currentUser.name.substr(0, 2)}
-              </div>
-              <div>
-                <p className="text-xs font-bold text-[#0F172A] truncate w-36">{currentUser.name}</p>
-                <p className="text-[10px] text-[#64748B] font-mono tracking-tight">{currentUser.id}</p>
-              </div>
+            <div>
+              <p className="text-xs font-bold text-[#0F172A] truncate w-36">{currentUser.name}</p>
+              <p className="text-[10px] text-[#64748B] font-mono tracking-tight">{currentUser.id}</p>
             </div>
-          )}
+          </div>
 
           {/* Navigation Links Group */}
           <div className="space-y-1">
@@ -1387,12 +2165,12 @@ export default function App() {
                           b.availableCopies > 0 ? (
                             <button
                               onClick={() => {
-                                // Request check-out directly if librarian/admin, or open guide if member
+                                // Request check-out directly if librarian/admin, or self-borrow if member
                                 if (currentUser.role === "librarian" || currentUser.role === "admin") {
                                   setIssueBookId(b.id);
                                   setShowIssueModal(true);
                                 } else {
-                                  alert("Please bring your physical member QR code or app ticket to Librarian Sarah to quickly issue this book.");
+                                  handleBorrowBookDirect(b.id);
                                 }
                               }}
                               className="flex-1 bg-blue-600 text-white hover:bg-blue-700 font-semibold py-2 rounded-xl text-xs transition-all cursor-pointer"
@@ -1409,7 +2187,7 @@ export default function App() {
                           )
                         ) : (
                           <button
-                            onClick={() => alert("Please sign in or use quick demo log-in on left side to self-issue or reserve books!")}
+                            onClick={() => showToast("Please sign in or use quick demo log-in on left side to self-issue or reserve books!", "info")}
                             className="flex-1 bg-blue-50 text-blue-600 font-semibold py-2 rounded-xl text-xs transition-all"
                           >
                             Sign-In To Borrow
@@ -1654,7 +2432,7 @@ export default function App() {
                         .map((b) => (
                           <div key={b.id} className="p-3.5 bg-slate-50 border border-slate-100 rounded-xl flex items-center justify-between">
                             <div>
-                              <h4 className="font-bold text-xs text-[#0F172A]">{b.bookTitle}</h4>
+                              <h4 className="font-bold text-xs text-[#0F172A]">{b.bookTitle || books.find(x => x.id === b.bookId)?.title || "Unknown Book"}</h4>
                               <p className="text-[10px] text-[#64748B] mt-0.5">Due: {b.dueDate} • Borrowed: {b.borrowDate}</p>
                             </div>
                             <div className="flex items-center gap-2">
@@ -1683,15 +2461,15 @@ export default function App() {
                   <div>
                     <h3 className="font-bold text-sm text-[#0F172A] border-b border-[#F1F5F9] pb-2">Active Hold Queues</h3>
                     <div className="space-y-2.5 mt-2.5">
-                      {reservations.filter((r) => r.userId === currentUser.id && r.status === "pending").length === 0 ? (
+                      {userReservations.filter((r) => r.userId === currentUser.id && r.status === "pending").length === 0 ? (
                         <p className="text-xs text-[#64748B] text-center py-2">No active hold holds</p>
                       ) : (
-                        reservations
+                        userReservations
                           .filter((r) => r.userId === currentUser.id && r.status === "pending")
                           .map((r) => (
                             <div key={r.id} className="p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-xs flex justify-between items-center">
                               <div>
-                                <span className="font-semibold text-[#0F172A] block truncate w-32">{r.bookTitle}</span>
+                                <span className="font-semibold text-[#0F172A] block truncate w-32">{r.bookTitle || books.find(x => x.id === r.bookId)?.title || "Unknown Book"}</span>
                                 <span className="text-[10px] text-[#64748B]">Queue pos: {r.queuePosition}</span>
                               </div>
                               <button
@@ -1718,7 +2496,7 @@ export default function App() {
                           .map((f) => (
                             <div key={f.id} className="p-2.5 bg-rose-50/50 rounded-xl border border-rose-100 text-xs flex justify-between items-center">
                               <div>
-                                <span className="font-semibold text-[#0F172A] block truncate w-32">{f.bookTitle}</span>
+                                <span className="font-semibold text-[#0F172A] block truncate w-32">{f.bookTitle || books.find(x => x.id === f.borrowId)?.title || "Unknown Book"}</span>
                                 <span className="text-[10px] text-rose-600 font-bold">₹{f.amount} Outstanding</span>
                               </div>
                               <button
@@ -1857,7 +2635,7 @@ export default function App() {
                         try {
                           const res = await fetch("/api/fines/sweep", { method: "POST" });
                           if (res.ok) {
-                            alert("Forced system-wide sweep! Fines and overdue status tables refreshed.");
+                            showToast("Forced system-wide sweep! Fines and overdue status tables refreshed.", "success");
                             fetchDashboardMetrics();
                             fetchFines();
                           }
@@ -1900,6 +2678,66 @@ export default function App() {
                 </div>
               </div>
 
+              {/* NEW SECTION: Pending Hold & Borrow Requests */}
+              <div className="bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden shadow-sm">
+                <div className="px-6 py-4 bg-amber-50/40 border-b border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                    <h3 className="font-bold text-sm text-[#0F172A]">Pending Borrow & Hold Requests</h3>
+                  </div>
+                  <span className="text-xs font-semibold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-md">
+                    {reservations.filter((r) => r.status === "pending").length} Pending Requests
+                  </span>
+                </div>
+
+                <div className="divide-y divide-[#F1F5F9] max-h-80 overflow-y-auto">
+                  {reservations.filter((r) => r.status === "pending").length === 0 ? (
+                    <div className="p-6 text-center text-xs text-[#64748B]">
+                      <span className="text-xl block mb-1">🎉</span>
+                      No pending borrow or hold requests from members at the moment.
+                    </div>
+                  ) : (
+                    reservations
+                      .filter((r) => r.status === "pending")
+                      .map((r) => (
+                        <div key={r.id} className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50 transition-all">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">
+                                {r.id}
+                              </span>
+                              <span className="text-xs font-semibold text-[#0F172A]">
+                                {r.memberName || members.find(m => m.id === r.userId)?.name || "Unknown Member"}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                Requested: {r.reserveDate}
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#0F172A] font-medium">
+                              Wants to borrow: <span className="text-blue-600 font-semibold">{r.bookTitle || books.find(x => x.id === r.bookId)?.title || "Unknown Book"}</span>
+                            </p>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleApproveRequest(r.id, r.userId, r.bookId)}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-1.5 rounded-xl shadow-sm transition-all cursor-pointer"
+                            >
+                              Approve & Issue
+                            </button>
+                            <button
+                              onClick={() => handleDeclineRequest(r.id)}
+                              className="bg-white border border-[#E2E8F0] hover:bg-rose-50 text-rose-600 font-bold text-xs px-3 py-1.5 rounded-xl transition-all cursor-pointer"
+                            >
+                              Decline
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </div>
+
               {/* Lists and Records tabs inside librarian panel */}
               <div className="bg-white border border-[#E2E8F0] rounded-2xl overflow-hidden shadow-sm">
                 <div className="px-6 py-4 bg-slate-50 border-b border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1924,10 +2762,10 @@ export default function App() {
                         <tr key={b.id} className="hover:bg-[#F8FAFC]">
                           <td className="p-4 font-mono text-[#64748B]">{b.id}</td>
                           <td className="p-4">
-                            <span className="text-[#0F172A] block">{b.memberName}</span>
+                            <span className="text-[#0F172A] block">{b.memberName || members.find(m => m.id === b.userId)?.name || "Unknown Member"}</span>
                             <span className="text-[10px] text-[#64748B] font-mono">{b.userId}</span>
                           </td>
-                          <td className="p-4 font-bold text-[#0F172A]">{b.bookTitle}</td>
+                          <td className="p-4 font-bold text-[#0F172A]">{b.bookTitle || books.find(x => x.id === b.bookId)?.title || "Unknown Book"}</td>
                           <td className="p-4 text-[#64748B]">
                             {b.borrowDate} to {b.dueDate}
                           </td>
@@ -2607,6 +3445,93 @@ export default function App() {
                 Save Member Record
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Alert */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50">
+          <div className={`flex items-center gap-3 px-4 py-3 rounded-2xl shadow-xl border ${
+            toast.type === "success" 
+              ? "bg-emerald-50 border-emerald-100 text-emerald-800" 
+              : toast.type === "error"
+              ? "bg-rose-50 border-rose-100 text-rose-800"
+              : "bg-blue-50 border-blue-100 text-blue-800"
+          }`}>
+            <span className="text-xs font-semibold">{toast.message}</span>
+            <button 
+              onClick={() => setToast(null)}
+              className="text-xs font-bold hover:opacity-70 px-1 ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Modal */}
+      {confirmModal && confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100">
+            <h3 className="font-bold text-base text-[#0F172A] mb-2">{confirmModal.title}</h3>
+            <p className="text-xs text-[#64748B] leading-relaxed mb-6">{confirmModal.message}</p>
+            <div className="flex justify-end gap-2.5">
+              <button
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                {confirmModal.cancelText || "Cancel"}
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+              >
+                {confirmModal.confirmText || "Confirm"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt Modal */}
+      {promptModal && promptModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-100">
+            <h3 className="font-bold text-base text-[#0F172A] mb-2">{promptModal.title}</h3>
+            <p className="text-xs text-[#64748B] leading-relaxed mb-4">{promptModal.message}</p>
+            
+            <input
+              id="prompt-input-main"
+              type="text"
+              defaultValue={promptModal.placeholder || ""}
+              placeholder="Type your response here..."
+              className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] text-xs mb-6 focus:ring-2 focus:ring-blue-500 outline-none"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  promptModal.onConfirm((e.currentTarget as HTMLInputElement).value);
+                }
+              }}
+            />
+            
+            <div className="flex justify-end gap-2.5">
+              <button
+                onClick={() => setPromptModal(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const input = document.getElementById("prompt-input-main") as HTMLInputElement;
+                  promptModal.onConfirm(input?.value || "");
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+              >
+                Submit
+              </button>
+            </div>
           </div>
         </div>
       )}

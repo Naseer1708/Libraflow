@@ -85,12 +85,59 @@ calculateAndUpdateOverdueFines();
 // AUTHENTICATION ENDPOINTS
 // ==========================================
 
+// In-memory Captcha Store
+const activeCaptchas = new Map<string, { answer: string; expires: number }>();
+
+// Clean up expired captchas periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, value] of activeCaptchas.entries()) {
+    if (now > value.expires) {
+      activeCaptchas.delete(id);
+    }
+  }
+}, 60000);
+
+// Endpoint to generate a new Captcha
+app.get("/api/auth/captcha", (req: Request, res: Response) => {
+  const id = "CAP" + Math.random().toString(36).substring(2, 10).toUpperCase();
+  // Generate random 5-character alphanumeric captcha, excluding confusing ones (O, 0, I, 1)
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 5; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  
+  activeCaptchas.set(id, {
+    answer: code,
+    expires: Date.now() + 5 * 60 * 1000, // 5 minutes expiration
+  });
+  
+  res.json({ id, code });
+});
+
 app.post("/api/auth/register", (req: Request, res: Response) => {
-  const { name, email, password, role, phone, address, membershipType } = req.body;
+  const { name, email, password, role, phone, address, membershipType, captchaId, captchaValue } = req.body;
 
   if (!name || !email || !password) {
     return res.status(400).json({ error: "Name, email, and password are required." });
   }
+
+  if (!captchaId || !captchaValue) {
+    return res.status(400).json({ error: "Captcha verification is required." });
+  }
+
+  const stored = activeCaptchas.get(captchaId);
+  if (!stored || Date.now() > stored.expires) {
+    return res.status(400).json({ error: "Captcha has expired. Please refresh the captcha and try again." });
+  }
+
+  if (stored.answer.toLowerCase() !== captchaValue.trim().toLowerCase()) {
+    return res.status(400).json({ error: "Incorrect Captcha. Please check the code and try again." });
+  }
+
+  // Delete captcha to prevent reuse
+  activeCaptchas.delete(captchaId);
 
   const data = db.get();
   const existingUser = data.users.find((u) => u.email.toLowerCase() === email.toLowerCase());
@@ -121,10 +168,29 @@ app.post("/api/auth/register", (req: Request, res: Response) => {
 });
 
 app.post("/api/auth/login", (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const { email, password, captchaId, captchaValue, isDemoBypass } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  // Allow bypass for system demo buttons
+  if (!isDemoBypass && captchaValue !== "DEMO_BYPASS") {
+    if (!captchaId || !captchaValue) {
+      return res.status(400).json({ error: "Captcha verification is required." });
+    }
+
+    const stored = activeCaptchas.get(captchaId);
+    if (!stored || Date.now() > stored.expires) {
+      return res.status(400).json({ error: "Captcha has expired. Please refresh the captcha and try again." });
+    }
+
+    if (stored.answer.toLowerCase() !== captchaValue.trim().toLowerCase()) {
+      return res.status(400).json({ error: "Incorrect Captcha. Please check the code and try again." });
+    }
+
+    // Delete captcha to prevent reuse
+    activeCaptchas.delete(captchaId);
   }
 
   const data = db.get();
@@ -566,6 +632,14 @@ app.post("/api/borrows/issue", (req: Request, res: Response) => {
 
     data.borrows.push(newBorrow);
 
+    // Auto-fulfill any pending reservation of this book for this member
+    const pendingRes = data.reservations.find(
+      (r) => r.userId === userId && r.bookId === bookId && r.status === "pending"
+    );
+    if (pendingRes) {
+      pendingRes.status = "fulfilled";
+    }
+
     // In-app Notification
     const notification: Notification = {
       id: "NT" + Date.now().toString().substr(-6),
@@ -711,7 +785,38 @@ app.post("/api/reservations", (req: Request, res: Response) => {
     };
 
     data.reservations.push(newRes);
-    logAction(userId, "Reserve Book", `Reserved book ID: ${bookId}`);
+    logAction(userId, "Reserve Book", `Reserved/Requested book ID: ${bookId}`);
+
+    const book = data.books.find((b) => b.id === bookId);
+    const member = data.users.find((u) => u.id === userId);
+
+    // Create a notification for the member
+    const memberNotif: Notification = {
+      id: "NT" + Date.now().toString().substr(-6) + "M",
+      userId,
+      title: "Borrow Request Submitted",
+      message: `Your borrow request for "${book ? book.title : "Unknown Book"}" has been sent to the Librarian. It is pending approval.`,
+      type: "system",
+      isRead: false,
+      createdDate: new Date().toISOString().split("T")[0]
+    };
+    data.notifications.unshift(memberNotif);
+
+    // Create notification for ALL librarians/admins!
+    const staffUsers = data.users.filter((u) => u.role === "librarian" || u.role === "admin");
+    staffUsers.forEach((staff) => {
+      const staffNotif: Notification = {
+        id: "NT" + (Date.now() + Math.floor(Math.random() * 1000)).toString().substr(-6) + "S",
+        userId: staff.id,
+        title: "New Borrow Request",
+        message: `Member ${member ? member.name : "Unknown"} wants to borrow "${book ? book.title : "Unknown Book"}" (Request ${newRes.id}).`,
+        type: "system",
+        isRead: false,
+        createdDate: new Date().toISOString().split("T")[0]
+      };
+      data.notifications.unshift(staffNotif);
+    });
+
     res.status(201).json(newRes);
   });
 });
@@ -725,6 +830,21 @@ app.post("/api/reservations/cancel", (req: Request, res: Response) => {
 
     reservation.status = "cancelled";
     logAction(reservation.userId, "Cancel Reservation", `Cancelled reservation ID: ${reservationId}`);
+
+    const book = data.books.find((b) => b.id === reservation.bookId);
+
+    // Create a notification for the member
+    const memberNotif: Notification = {
+      id: "NT" + Date.now().toString().substr(-6) + "C",
+      userId: reservation.userId,
+      title: "Borrow Request Cancelled / Declined",
+      message: `Your request/hold for "${book ? book.title : "Unknown Book"}" has been cancelled or declined.`,
+      type: "system",
+      isRead: false,
+      createdDate: new Date().toISOString().split("T")[0]
+    };
+    data.notifications.unshift(memberNotif);
+
     res.json({ message: "Reservation cancelled.", reservation });
   });
 });
@@ -801,22 +921,25 @@ app.post("/api/chatbot/chat", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "Message content is required." });
   }
 
-  try {
-    const responseText = await generateLunaResponse(userId || null, message, history || []);
+  // Ensure userId is strictly a valid string and not "undefined" / "null"
+  const isValidUser = userId && userId !== "undefined" && userId !== "null" && String(userId).trim() !== "";
 
-    // Save message to chat history in database if userId provided
-    if (userId) {
+  try {
+    const responseText = await generateLunaResponse(isValidUser ? String(userId) : null, message, history || []);
+
+    // Save message to chat history in database if valid userId provided
+    if (isValidUser) {
       db.transaction((data) => {
         const userMsg = {
           id: "MSG" + Date.now() + "U",
-          userId,
+          userId: String(userId),
           message,
           sender: "user" as const,
           createdDate: new Date().toISOString(),
         };
         const lunaMsg = {
           id: "MSG" + (Date.now() + 1) + "L",
-          userId,
+          userId: String(userId),
           message: responseText,
           sender: "luna" as const,
           createdDate: new Date().toISOString(),
@@ -833,12 +956,12 @@ app.post("/api/chatbot/chat", async (req: Request, res: Response) => {
 
 app.get("/api/chatbot/history", (req: Request, res: Response) => {
   const { userId } = req.query;
-  if (!userId) {
-    return res.status(400).json({ error: "User ID is required for chat history." });
+  if (!userId || userId === "undefined" || userId === "null" || String(userId).trim() === "") {
+    return res.status(400).json({ error: "A valid User ID is required for chat history." });
   }
 
   const data = db.get();
-  const history = data.chatHistory.filter((msg) => msg.userId === userId);
+  const history = data.chatHistory.filter((msg) => msg.userId === String(userId));
   res.json(history);
 });
 

@@ -138,21 +138,35 @@ If GEMINI_API_KEY is not defined, respond with a helpful local assistance greeti
     },
   ];
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents,
-      config: {
-        systemInstruction,
-        temperature: 0.7,
-      },
-    });
+  let attempts = 0;
+  const maxAttempts = 2;
+  let lastError: any = null;
 
-    return response.text || "I apologize, I could not formulate a response at this moment. Let me know how else I can help.";
-  } catch (error) {
-    console.error("Gemini API call failed, using smart local fallback:", error);
-    return localLunaFallback(message, booksWithDetails, activeUser, activeBorrowsDetails, userFines);
+  while (attempts < maxAttempts) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents,
+        config: {
+          systemInstruction,
+          temperature: 0.7,
+        },
+      });
+
+      return response.text || "I apologize, I could not formulate a response at this moment. Let me know how else I can help.";
+    } catch (error: any) {
+      lastError = error;
+      attempts++;
+      console.warn(`Gemini API attempt ${attempts} failed. Error: ${error?.message || error}.`);
+      if (attempts < maxAttempts) {
+        // Wait a short delay (e.g., 800ms) before retrying
+        await new Promise((resolve) => setTimeout(resolve, 800));
+      }
+    }
   }
+
+  console.error("All Gemini API attempts failed, using smart local fallback:", lastError);
+  return localLunaFallback(message, booksWithDetails, activeUser, activeBorrowsDetails, userFines);
 }
 
 // Highly responsive local fallback rule engine if API key is missing or calls fail
