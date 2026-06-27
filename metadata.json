@@ -1,0 +1,6 @@
+{
+  "name": "Libraflow",
+  "description": "A calm, SaaS-grade Library Management System with intelligent book discovery and Luna AI Assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
