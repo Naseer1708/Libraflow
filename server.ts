@@ -477,6 +477,75 @@ app.post("/api/books/import-csv", (req: Request, res: Response) => {
 });
 
 // ==========================================
+// USER SELF-SERVICE PROFILE & PASSWORD ENDPOINTS
+// ==========================================
+
+app.put("/api/users/self/profile", (req: Request, res: Response) => {
+  const { userId, name, email, phone, address } = req.body;
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  db.transaction((data) => {
+    const user = data.users.find((u) => u.id === userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Verify email unique if updated
+    if (email && email.toLowerCase() !== user.email.toLowerCase()) {
+      const emailExists = data.users.some((u) => u.id !== userId && u.email.toLowerCase() === email.toLowerCase());
+      if (emailExists) {
+        return res.status(400).json({ error: "Email is already in use by another account." });
+      }
+      user.email = email;
+    }
+
+    if (name) user.name = name;
+    if (phone) user.phone = phone;
+    if (address) user.address = address;
+
+    logAction(userId, "Update Profile", `Updated self profile: ${user.name}`);
+    res.json({ message: "Profile updated successfully.", user });
+  });
+});
+
+app.put("/api/users/self/password", (req: Request, res: Response) => {
+  const { userId, currentPassword, newPassword } = req.body;
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  db.transaction((data) => {
+    const user = data.users.find((u) => u.id === userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    if (user.passwordHash !== currentPassword) {
+      return res.status(400).json({ error: "Current password is incorrect." });
+    }
+    user.passwordHash = newPassword;
+    logAction(userId, "Change Password", "Changed password successfully");
+    res.json({ message: "Password updated successfully." });
+  });
+});
+
+app.delete("/api/users/self", (req: Request, res: Response) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  db.transaction((data) => {
+    const idx = data.users.findIndex((u) => u.id === userId);
+    if (idx === -1) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const name = data.users[idx].name;
+    data.users.splice(idx, 1);
+    logAction("System", "Self Delete Account", `User deleted their own account: ${name} (${userId})`);
+    res.json({ message: "Account deleted successfully." });
+  });
+});
+
+// ==========================================
 // MEMBER MANAGEMENT ENDPOINTS
 // ==========================================
 

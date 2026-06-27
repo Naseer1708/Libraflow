@@ -389,6 +389,21 @@ export default function App() {
   const [csvContent, setCsvContent] = useState<string>("");
   const [showCsvImport, setShowCsvImport] = useState<boolean>(false);
 
+  // User Self Profile & Password modal states
+  const [showSelfSettingsModal, setShowSelfSettingsModal] = useState<boolean>(false);
+  const [selfSettingsTab, setSelfSettingsTab] = useState<"profile" | "password">("profile");
+  const [selfProfileForm, setSelfProfileForm] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    address: ""
+  });
+  const [selfPasswordForm, setSelfPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmNewPassword: ""
+  });
+
   // Issue Form fields
   const [issueUserId, setIssueUserId] = useState<string>("");
   const [issueBookId, setIssueBookId] = useState<string>("");
@@ -1266,6 +1281,151 @@ export default function App() {
     }
   };
 
+  // User profile & settings self update
+  const openSelfSettings = () => {
+    if (!currentUser) return;
+    setSelfProfileForm({
+      name: currentUser.name,
+      email: currentUser.email,
+      phone: currentUser.phone || "",
+      address: currentUser.address || ""
+    });
+    setSelfPasswordForm({
+      currentPassword: "",
+      newPassword: "",
+      confirmNewPassword: ""
+    });
+    setSelfSettingsTab("profile");
+    setShowSelfSettingsModal(true);
+  };
+
+  const handleUpdateSelfProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    try {
+      const res = await fetch("/api/users/self/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          ...selfProfileForm
+        }),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setCurrentUser(result.user);
+        const stored = localStorage.getItem("libraflow_user");
+        if (stored) {
+          localStorage.setItem("libraflow_user", JSON.stringify(result.user));
+        }
+        showToast("Profile updated successfully!", "success");
+        setShowSelfSettingsModal(false);
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Failed to update profile.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Error updating profile.", "error");
+    }
+  };
+
+  const handleUpdateSelfPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (selfPasswordForm.newPassword !== selfPasswordForm.confirmNewPassword) {
+      showToast("New passwords do not match.", "error");
+      return;
+    }
+    if (!selfPasswordForm.currentPassword || !selfPasswordForm.newPassword) {
+      showToast("Please fill all password fields.", "error");
+      return;
+    }
+    try {
+      const res = await fetch("/api/users/self/password", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          currentPassword: selfPasswordForm.currentPassword,
+          newPassword: selfPasswordForm.newPassword
+        }),
+      });
+      if (res.ok) {
+        showToast("Password updated successfully!", "success");
+        setSelfPasswordForm({
+          currentPassword: "",
+          newPassword: "",
+          confirmNewPassword: ""
+        });
+        setShowSelfSettingsModal(false);
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Failed to update password.", "error");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Error updating password.", "error");
+    }
+  };
+
+  const handleDeleteSelfAccount = () => {
+    if (!currentUser) return;
+    showConfirm(
+      "Delete Account Permanently",
+      "Are you sure you want to permanently delete your account? This action cannot be undone and you will be immediately logged out.",
+      async () => {
+        try {
+          const res = await fetch("/api/users/self", {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ userId: currentUser.id })
+          });
+          if (res.ok) {
+            showToast("Your account has been deleted.", "info");
+            setCurrentUser(null);
+            localStorage.removeItem("libraflow_user");
+            setActiveTab("catalog");
+            setShowSelfSettingsModal(false);
+          } else {
+            const err = await res.json();
+            showToast(err.error || "Failed to delete account.", "error");
+          }
+        } catch (err) {
+          console.error(err);
+          showToast("Error deleting account.", "error");
+        }
+      },
+      "Delete Forever",
+      "Keep My Account"
+    );
+  };
+
+  const handleDeleteMember = (memberId: string) => {
+    showConfirm(
+      "Delete User Account",
+      `Are you sure you want to delete member ${memberId}? This will remove them permanently from the library registry.`,
+      async () => {
+        try {
+          const res = await fetch(`/api/members/${memberId}?userId=${currentUser?.id}`, {
+            method: "DELETE"
+          });
+          if (res.ok) {
+            showToast("Member account deleted successfully.", "success");
+            fetchMembers();
+            fetchDashboardMetrics();
+          } else {
+            const err = await res.json();
+            showToast(err.error || "Failed to delete member.", "error");
+          }
+        } catch (err) {
+          console.error(err);
+          showToast("Error deleting member.", "error");
+        }
+      }
+    );
+  };
+
   // Setup sample book gradient generators
   const getBookGradient = (title: string) => {
     const gradients = [
@@ -1848,13 +2008,22 @@ export default function App() {
                   {currentUser.role}
                 </span>
               </div>
-              <button
-                onClick={handleLogout}
-                className="p-1.5 text-[#64748B] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all"
-                title="Log out"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={openSelfSettings}
+                  className="p-1.5 text-[#64748B] hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all cursor-pointer"
+                  title="Profile & Settings"
+                >
+                  <Settings className="w-4 h-4 animate-hover-spin" />
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="p-1.5 text-[#64748B] hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                  title="Log out"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ) : (
             <span className="text-xs font-semibold text-[#64748B] bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
@@ -2845,13 +3014,13 @@ export default function App() {
                           <td className="p-4 text-right space-x-1.5">
                             <button
                               onClick={() => openEditMemberModal(m)}
-                              className="text-blue-600 hover:bg-blue-50 font-semibold px-2 py-1 rounded border border-blue-200"
+                              className="text-blue-600 hover:bg-blue-50 font-semibold px-2 py-1 rounded border border-blue-200 cursor-pointer"
                             >
                               Edit Profile
                             </button>
                             <button
                               onClick={() => toggleMemberStatus(m)}
-                              className={`font-semibold px-2 py-1 rounded border ${
+                              className={`font-semibold px-2 py-1 rounded border cursor-pointer ${
                                 m.status === 'active'
                                   ? 'text-rose-600 border-rose-200 hover:bg-rose-50'
                                   : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50'
@@ -2859,6 +3028,14 @@ export default function App() {
                             >
                               {m.status === 'active' ? "Suspend" : "Activate"}
                             </button>
+                            {currentUser?.role === "admin" && (
+                              <button
+                                onClick={() => handleDeleteMember(m.id)}
+                                className="text-rose-600 hover:bg-rose-100/50 font-semibold px-2 py-1 rounded border border-rose-200 cursor-pointer"
+                              >
+                                Delete
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -3440,11 +3617,164 @@ export default function App() {
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 text-white hover:bg-blue-700 font-bold py-2.5 rounded-xl text-xs transition-all"
+                className="w-full bg-blue-600 text-white hover:bg-blue-700 font-bold py-2.5 rounded-xl text-xs transition-all cursor-pointer"
               >
                 Save Member Record
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: USER PROFILE & SETTINGS SELF-SERVICE */}
+      {showSelfSettingsModal && currentUser && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+          <div className="bg-white border border-[#E2E8F0] rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+            <button
+              onClick={() => setShowSelfSettingsModal(false)}
+              className="absolute right-5 top-5 p-1.5 text-slate-400 hover:text-slate-900 rounded-lg cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div>
+              <h3 className="font-bold text-base text-[#0F172A]">Account Settings</h3>
+              <p className="text-[11px] text-[#64748B]">Manage your library profile, login credentials, or account deletion.</p>
+            </div>
+
+            {/* Tab Switches */}
+            <div className="flex border-b border-[#E2E8F0]">
+              <button
+                onClick={() => setSelfSettingsTab("profile")}
+                className={`flex-1 py-2 text-xs font-bold text-center border-b-2 transition-all cursor-pointer ${
+                  selfSettingsTab === "profile"
+                    ? "border-blue-600 text-blue-600 font-bold"
+                    : "border-transparent text-[#64748B] hover:text-[#0F172A]"
+                }`}
+              >
+                Edit Profile
+              </button>
+              <button
+                onClick={() => setSelfSettingsTab("password")}
+                className={`flex-1 py-2 text-xs font-bold text-center border-b-2 transition-all cursor-pointer ${
+                  selfSettingsTab === "password"
+                    ? "border-blue-600 text-blue-600 font-bold"
+                    : "border-transparent text-[#64748B] hover:text-[#0F172A]"
+                }`}
+              >
+                Change Password
+              </button>
+            </div>
+
+            {selfSettingsTab === "profile" ? (
+              <form onSubmit={handleUpdateSelfProfile} className="space-y-4 text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Full Name</label>
+                  <input
+                    type="text"
+                    value={selfProfileForm.name}
+                    onChange={(e) => setSelfProfileForm({ ...selfProfileForm, name: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Email Address</label>
+                  <input
+                    type="email"
+                    value={selfProfileForm.email}
+                    onChange={(e) => setSelfProfileForm({ ...selfProfileForm, email: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={selfProfileForm.phone}
+                    onChange={(e) => setSelfProfileForm({ ...selfProfileForm, phone: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Address</label>
+                  <textarea
+                    value={selfProfileForm.address}
+                    onChange={(e) => setSelfProfileForm({ ...selfProfileForm, address: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl p-3 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    rows={2}
+                  />
+                </div>
+
+                <div className="pt-2 flex flex-col gap-3">
+                  <button
+                    type="submit"
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-all cursor-pointer"
+                  >
+                    Save Changes
+                  </button>
+
+                  <div className="border-t border-[#F1F5F9] pt-3">
+                    <button
+                      type="button"
+                      onClick={handleDeleteSelfAccount}
+                      className="w-full bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold py-2 rounded-xl text-[11px] transition-all flex items-center justify-center gap-1.5 border border-rose-100 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Delete My Account
+                    </button>
+                  </div>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleUpdateSelfPassword} className="space-y-4 text-xs">
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Current Password</label>
+                  <input
+                    type="password"
+                    value={selfPasswordForm.currentPassword}
+                    onChange={(e) => setSelfPasswordForm({ ...selfPasswordForm, currentPassword: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">New Password</label>
+                  <input
+                    type="password"
+                    value={selfPasswordForm.newPassword}
+                    onChange={(e) => setSelfPasswordForm({ ...selfPasswordForm, newPassword: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-[#64748B] uppercase tracking-wider block mb-1">Confirm New Password</label>
+                  <input
+                    type="password"
+                    value={selfPasswordForm.confirmNewPassword}
+                    onChange={(e) => setSelfPasswordForm({ ...selfPasswordForm, confirmNewPassword: e.target.value })}
+                    className="w-full bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl px-3.5 py-2.5 text-[#0F172A] outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  />
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition-all cursor-pointer"
+                  >
+                    Update Password
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
